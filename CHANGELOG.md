@@ -1,3 +1,12 @@
+# [1.1.0](https://github.com/forcedotcom/soql-language-server/compare/0.9.0...1.1.0) (2026-03-10)
+
+
+### Features
+
+* v1 release ([#57](https://github.com/forcedotcom/soql-language-server/issues/57)) ([37c9be5](https://github.com/forcedotcom/soql-language-server/commit/37c9be571ed6b1513a4bf75c36bfc4412837e4ac))
+
+
+
 # [0.9.0](https://github.com/forcedotcom/soql-language-server/compare/v0.8.0...0.9.0) (2026-03-10)
 
 
