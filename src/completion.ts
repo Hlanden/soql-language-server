@@ -36,6 +36,30 @@ const DEFAULT_SOBJECT = 'Object';
 
 const itemsForBuiltinFunctions = soqlFunctions.map(soqlFn => newFunctionItem(soqlFn.name));
 
+// Date-range literals (e.g. THIS_YEAR, LAST_MONTH) are tokenized as IDENTIFIER by the SOQL
+// lexer.  When the cursor lands on the token *after* one of these literals (e.g. the line
+// below `AND CreatedDate >= THIS_YEAR`), C3's ATN traversal cannot determine whether the
+// identifier ends the expression or begins a dot-traversal chain, so it returns no candidates.
+// Replacing these literals with a plain date literal (`2000-01-01`) before parsing gives C3
+// a deterministic token type and lets it propose the correct follow-up tokens (AND, LIMIT …).
+// Parametric forms like `LAST_N_DAYS:90` are replaced the same way.
+const DATE_RANGE_LITERAL_RE = new RegExp(
+  '\\b(' +
+    [...soqlDateRangeLiterals, ...soqlParametricDateRangeLiterals.map(l => l.split(':')[0])]
+      .map(l => l.replace(/_/g, '_'))
+      .join('|') +
+    ')(:\\d+)?\\b',
+  'gi'
+);
+
+// Substitute date-range literals with a neutral date so the ANTLR parser sees a
+// known literal type instead of a bare IDENTIFIER.  The replacement string is chosen
+// to be the same byte-length as the original when possible (no padding needed here
+// because the cursor is always on a *different* line from the substituted tokens).
+function substituteDateRangeLiterals(text: string): string {
+  return text.replace(DATE_RANGE_LITERAL_RE, '2000-01-01');
+}
+
 /**
  * Returns the text and adjusted line number to use for completion.
  *
@@ -77,7 +101,8 @@ export function extractActiveQueryText(
   let depth = 0;
   let hasSelectBeforeLine = false;
   let hasFromBeforeLine = false;
-  let hasFromSobjectBeforeLine = false; // at least one IDENTIFIER after the top-level FROM
+  let hasFromSobjectBeforeLine = false; // first non-WS token after the top-level FROM
+  let hasClauseKeywordsBeforeLine = false; // WHERE / GROUP / ORDER / HAVING / etc. seen after FROM
   let afterFrom = false;
   let lastNonWSLineBeforeCursor = -1;
 
@@ -92,21 +117,41 @@ export function extractActiveQueryText(
     else if (depth === 0 && t.type === SoqlLexer.SELECT) {
       hasSelectBeforeLine = true;
       afterFrom = false;
+      hasFromSobjectBeforeLine = false;
+      hasClauseKeywordsBeforeLine = false;
     } else if (depth === 0 && t.type === SoqlLexer.FROM) {
       hasFromBeforeLine = true;
       afterFrom = true;
-    } else if (depth === 0 && afterFrom && t.type === SoqlLexer.IDENTIFIER) {
+    } else if (depth === 0 && afterFrom && !hasFromSobjectBeforeLine) {
+      // The very first non-WS token after FROM is the sobject name, regardless
+      // of its token type (handles keyword-named SObjects like Case, Order, etc.)
       hasFromSobjectBeforeLine = true;
-      // Keep afterFrom true — there can be aliases, etc.
+      afterFrom = false; // stop watching — don't let later tokens re-trigger
+    } else if (
+      depth === 0 &&
+      hasFromSobjectBeforeLine &&
+      (t.type === SoqlLexer.WHERE ||
+        t.type === SoqlLexer.GROUP ||
+        t.type === SoqlLexer.ORDER ||
+        t.type === SoqlLexer.HAVING ||
+        t.type === SoqlLexer.LIMIT ||
+        t.type === SoqlLexer.WITH)
+    ) {
+      // A clause keyword means the query continues — this is NOT a completed
+      // single-line query followed by a new query starting on the cursor line.
+      hasClauseKeywordsBeforeLine = true;
     }
   }
 
-  // If the text before the cursor line contains a complete top-level
-  // SELECT … FROM <sobject> block, the cursor is opening a new query context.
+  // Only treat the cursor as opening a *new* query when:
+  // - the preceding lines form a complete SELECT … FROM <sobject> block, AND
+  // - no clause keywords (WHERE / GROUP BY / ORDER BY / LIMIT / …) have been
+  //   seen — which would mean the same query continues past the FROM line.
   if (
     hasSelectBeforeLine &&
     hasFromBeforeLine &&
     hasFromSobjectBeforeLine &&
+    !hasClauseKeywordsBeforeLine &&
     lastNonWSLineBeforeCursor < line
   ) {
     const activeText = lines.slice(line - 1).join('\n');
@@ -119,7 +164,13 @@ export function extractActiveQueryText(
 export function completionsFor(text: string, line: number, column: number): CompletionItem[] {
   const { activeText, activeLine } = extractActiveQueryText(text, line);
 
-  const lexer = new SoqlLexer(new LowerCasingCharStream(parseHeaderComments(activeText).headerPaddedSoqlText));
+  // Replace date-range literals before lexing so that C3 sees a concrete date
+  // token rather than a bare IDENTIFIER, allowing it to propose correct
+  // follow-up tokens (AND, LIMIT, ORDER BY …) after expressions like
+  // `CreatedDate >= THIS_YEAR`.
+  const parseText = substituteDateRangeLiterals(activeText);
+
+  const lexer = new SoqlLexer(new LowerCasingCharStream(parseHeaderComments(parseText).headerPaddedSoqlText));
   const tokenStream = new CommonTokenStream(lexer);
   const parser = new SoqlParser(tokenStream);
   parser.removeErrorListeners();

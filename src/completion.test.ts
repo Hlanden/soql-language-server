@@ -1047,3 +1047,61 @@ describe('completionsFor: returns correct completions when opening an existing f
     );
   });
 });
+
+// ── Multi-line query: cursor inside or after a WHERE / GROUP BY / ORDER BY block ──
+//
+// Bug: extractActiveQueryText set hasFromSobjectBeforeLine as soon as ANY
+// IDENTIFIER appeared after FROM, including WHERE-clause field names.  This
+// caused every new line inside a multi-line query to be sliced off and parsed
+// as a fresh (empty) query, returning no completions.
+
+const MULTILINE_QUERY = [
+  "SELECT Cover_Cause__r.Name coverCauseName, COUNT(Id) recordCount",
+  "FROM Case",
+  "WHERE CountryCode__c = 'NO'",
+  "    AND (Status='Closed' OR Status='Auto closed')",
+  "    AND (NOT Coverage__r.Name LIKE '%kaskoskade%')",
+  "    AND CreatedDate >= THIS_YEAR",
+  "GROUP BY Cover_Cause__r.Name",
+  "ORDER BY COUNT(Id) DESC",
+].join('\n');
+
+describe('completionsFor: multi-line query continuation', () => {
+  it('extractActiveQueryText does NOT slice a multi-line query with WHERE / GROUP BY', () => {
+    // The query spans 8 lines.  Cursor is at the start of a 9th (empty) line.
+    // The preceding lines contain WHERE, GROUP BY, ORDER BY — the query is NOT
+    // finished; it is just multi-line.  extractActiveQueryText must return the
+    // full text unchanged.
+    const text = MULTILINE_QUERY + '\n';
+    const { activeText, activeLine } = extractActiveQueryText(text, 9);
+    expect(activeText).toBe(text);
+    expect(activeLine).toBe(9);
+  });
+
+  it('proposes LIMIT after ORDER BY DESC on a new line', () => {
+    // Cursor on line 9 (empty line after ORDER BY COUNT(Id) DESC)
+    const text = MULTILINE_QUERY + '\n';
+    const completions = completionsFor(text, 9, 1);
+    expect(completions).toContainEqual(expect.objectContaining({ label: 'LIMIT' }));
+  });
+
+  it('proposes AND when adding a new condition inside the WHERE clause', () => {
+    // Query split so the cursor is on an empty line 4, between WHERE lines.
+    const lines = [
+      "SELECT Id FROM Case",
+      "WHERE CountryCode__c = 'NO'",
+      "    AND Status = 'Closed'",
+      "    ",  // cursor at col 5 on line 4
+    ];
+    const text = lines.join('\n');
+    const completions = completionsFor(text, 4, 5);
+    expect(completions).toContainEqual(expect.objectContaining({ label: 'AND' }));
+  });
+
+  it('does NOT propose SELECT on a new line inside a multi-line WHERE query', () => {
+    const text = MULTILINE_QUERY + '\n';
+    const completions = completionsFor(text, 9, 1);
+    // SELECT is for a fresh new query — it must not appear here
+    expect(completions).not.toContainEqual(expect.objectContaining({ label: 'SELECT' }));
+  });
+});
