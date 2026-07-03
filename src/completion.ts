@@ -28,6 +28,7 @@ const SOBJECTS_ITEM_LABEL_PLACEHOLDER = '__SOBJECTS_PLACEHOLDER';
 const SOBJECT_FIELDS_LABEL_PLACEHOLDER = '__SOBJECT_FIELDS_PLACEHOLDER';
 const RELATIONSHIPS_PLACEHOLDER = '__RELATIONSHIPS_PLACEHOLDER';
 const RELATIONSHIP_FIELDS_PLACEHOLDER = '__RELATIONSHIP_FIELDS_PLACEHOLDER';
+const RELATIONSHIP_TRAVERSAL_PLACEHOLDER = '__RELATIONSHIP_TRAVERSAL_PLACEHOLDER';
 const LITERAL_VALUES_FOR_FIELD = '__LITERAL_VALUES_FOR_FIELD';
 const UPDATE_TRACKING = 'UPDATE TRACKING';
 const UPDATE_VIEWSTAT = 'UPDATE VIEWSTAT';
@@ -303,8 +304,23 @@ function generateCandidatesFromRules(
           ]); // inside a function expression (i.e.: "SELECT AVG(|" )
 
           // SELECT | FROM Xyz
+          // But also: SELECT Cover_Cause__r.N| FROM Case — the cursor is ON the start
+          // token, but the token text contains a dot, meaning the user is typing a
+          // field name after a relationship traversal prefix. Detect that first.
           if (tokenIndex === ruleData.startTokenIndex) {
-            if (isInnerQuery) {
+            const startToken = tokenStream.get(ruleData.startTokenIndex);
+            const startTokenText = startToken.text ?? '';
+            if (!isInnerQuery && startTokenText.includes('.')) {
+              // Partial traversal: "Cover_Cause__r.N" — split on last dot to get chain.
+              const lastDot = startTokenText.lastIndexOf('.');
+              const chain = startTokenText.slice(0, lastDot).split('.');
+              completionItems.push(
+                withSoqlContext(newFieldItem(RELATIONSHIP_TRAVERSAL_PLACEHOLDER), {
+                  ...soqlItemContext,
+                  relationshipChain: chain
+                })
+              );
+            } else if (isInnerQuery) {
               completionItems.push(
                 withSoqlContext(newFieldItem(RELATIONSHIP_FIELDS_PLACEHOLDER), {
                   ...soqlItemContext,
@@ -336,6 +352,31 @@ function generateCandidatesFromRules(
               }
             }
             completionItems.push(withSoqlContext(newFieldItem(SOBJECT_FIELDS_LABEL_PLACEHOLDER), soqlItemContext));
+          }
+          // "SELECT Account.| FROM Contact" or "SELECT Coverage__r.Policy__r.| FROM Case"
+          // The lexer swallows "Account." or "Coverage__r.Policy__r." as a single IDENTIFIER
+          // token ending with a dot. The cursor lands on the next token (FROM), so
+          // tokenIndex !== startTokenIndex. Detect by checking whether the start token
+          // text ends with '.'.
+          //
+          // Also handle "SELECT Cover_Cause__r.N| FROM Case" — the lexer produces a single
+          // IDENTIFIER token like "Cover_Cause__r.N" (contains a dot but does not end with
+          // one). Split on the last dot: everything before is the relationship chain,
+          // everything after is the partial field name the user is typing.
+          else {
+            const startToken = tokenStream.get(ruleData.startTokenIndex);
+            const tokenText = startToken.text;
+            if (tokenText && tokenText.includes('.')) {
+              const lastDot = tokenText.lastIndexOf('.');
+              const chainPart = tokenText.slice(0, lastDot);
+              const chain = chainPart.split('.');
+              completionItems.push(
+                withSoqlContext(newFieldItem(RELATIONSHIP_TRAVERSAL_PLACEHOLDER), {
+                  ...soqlItemContext,
+                  relationshipChain: chain
+                })
+              );
+            }
           }
         }
         // ... GROUP BY |
@@ -504,6 +545,7 @@ function newFunctionItem(text: string): CompletionItem {
 export interface SoqlItemContext {
   sobjectName: string;
   relationshipName?: string;
+  relationshipChain?: string[];
   fieldName?: string;
   onlyTypes?: string[];
   onlyAggregatable?: boolean;

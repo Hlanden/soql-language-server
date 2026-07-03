@@ -869,3 +869,61 @@ function relationshipFieldsFor(sobjectName: string, relationshipName?: string): 
     ...newKeywordItems('TYPEOF')
   ];
 }
+
+function traversalItemFor(sobjectName: string, relationshipChain: string[]): CompletionItem {
+  return {
+    kind: CompletionItemKind.Field,
+    label: '__RELATIONSHIP_TRAVERSAL_PLACEHOLDER',
+    data: { soqlContext: { sobjectName, relationshipChain } }
+  };
+}
+
+describe('Code Completion for dot-traversal in SELECT (Account.| / Coverage__r.Policy__r.|)', () => {
+  // Single-hop: standard object relationship
+  validateCompletionsFor('SELECT Account.| FROM Contact', [traversalItemFor('Contact', ['Account'])]);
+
+  // Single-hop: custom object relationship
+  validateCompletionsFor('SELECT Coverage__r.| FROM Case', [traversalItemFor('Case', ['Coverage__r'])]);
+
+  // Multi-hop: two relationship hops
+  validateCompletionsFor('SELECT Coverage__r.Policy__r.| FROM Case', [
+    traversalItemFor('Case', ['Coverage__r', 'Policy__r'])
+  ]);
+
+  // Traversal in a multi-field SELECT
+  validateCompletionsFor('SELECT Id, Account.| FROM Contact', [traversalItemFor('Contact', ['Account'])]);
+
+  // "SELECT Account.Name|" — the token "Account.Name" contains a dot, so traversal
+  // is emitted (chain = ["Account"]). cmp will filter results by the "Name" prefix.
+  // PH_FIELDS is NOT emitted because the dot-check takes priority.
+  it('SELECT Account.Name| FROM Contact emits traversal placeholder', () => {
+    const completions = completionsFor('SELECT Account.Name FROM Contact', 1, 20);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: '__RELATIONSHIP_TRAVERSAL_PLACEHOLDER' })
+    );
+    expect(completions).not.toContainEqual(
+      expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+  });
+
+  // Partial text after dot: cursor is mid-token "Cover_Cause__r.N|"
+  // The lexer produces a single IDENTIFIER "Cover_Cause__r.N"; traversal must
+  // be emitted with the chain derived from the part before the last dot.
+  // PH_FIELDS with sobjectName Case must NOT be emitted.
+  it('SELECT Cover_Cause__r.N| FROM Case emits traversal, not Case fields', () => {
+    const completions = completionsFor('SELECT Cover_Cause__r.N FROM Case', 1, 24);
+    expect(completions).toContainEqual(traversalItemFor('Case', ['Cover_Cause__r']));
+    expect(completions).not.toContainEqual(
+      expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+  });
+
+  // Same for multi-hop with partial text
+  it('SELECT Coverage__r.Policy__r.Id| FROM Case emits traversal, not Case fields', () => {
+    const completions = completionsFor('SELECT Coverage__r.Policy__r.Id FROM Case', 1, 32);
+    expect(completions).toContainEqual(traversalItemFor('Case', ['Coverage__r', 'Policy__r']));
+    expect(completions).not.toContainEqual(
+      expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+  });
+});
