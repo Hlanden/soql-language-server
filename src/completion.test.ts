@@ -928,6 +928,39 @@ describe('Code Completion for dot-traversal in SELECT (Account.| / Coverage__r.P
   });
 });
 
+// ── Dot-traversal in WHERE clause ─────────────────────────────────────────────
+//
+// The same dot-traversal detection that works in SELECT must also work in WHERE.
+// e.g.:  WHERE Cover_Cause__r.| should expand the related object's fields,
+//        not the FROM sobject (Case) fields.
+describe('Code Completion for dot-traversal in WHERE', () => {
+  // "WHERE Cover_Cause__r.| " — the lexer produces an IDENTIFIER token ending with
+  // a dot; the cursor lands on the next token.  Must emit TRAVERSAL, not Case fields.
+  validateCompletionsFor(
+    'SELECT Cover_Cause__r.Name FROM Case WHERE Cover_Cause__r.| LIKE \'%collision%\'',
+    [traversalItemFor('Case', ['Cover_Cause__r'])]
+  );
+
+  // "WHERE Cover_Cause__r.N|" — partial text after dot.  Same as SELECT case.
+  it('WHERE Cover_Cause__r.N| emits traversal, not Case fields', () => {
+    const completions = completionsFor(
+      "SELECT Cover_Cause__r.Name FROM Case WHERE Cover_Cause__r.N LIKE '%collision%'",
+      1,
+      59
+    );
+    expect(completions).toContainEqual(traversalItemFor('Case', ['Cover_Cause__r']));
+    expect(completions).not.toContainEqual(
+      expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+  });
+
+  // Multi-hop: WHERE Coverage__r.Policy__r.| should resolve the two-hop chain.
+  validateCompletionsFor(
+    'SELECT Id FROM Case WHERE Coverage__r.Policy__r.| = \'active\'',
+    [traversalItemFor('Case', ['Coverage__r', 'Policy__r'])]
+  );
+});
+
 // ── Regression: completions in existing files ─────────────────────────────────
 //
 // When a file already contains a complete SOQL query and the user opens the file

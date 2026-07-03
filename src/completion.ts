@@ -263,6 +263,29 @@ function generateCandidatesFromTokens(
   tokenIndex: number
 ): CompletionItem[] {
   const items: CompletionItem[] = [];
+
+  // Pre-check: if the non-WS token immediately before the cursor is an IDENTIFIER
+  // that ends with '.', the user has typed a relationship traversal prefix in the
+  // WHERE clause (e.g. "Cover_Cause__r." or "Coverage__r.Policy__r.").  The lexer
+  // produces a single IDENTIFIER token ending with a dot; C3 then places the cursor
+  // on the *next* token and proposes operators instead of field names.  Detect this
+  // here, emit TRAVERSAL, and skip all other token candidates for this position.
+  const prevToken = searchTokenBeforeCursor(tokenStream, tokenIndex, [SoqlLexer.IDENTIFIER]);
+  if (prevToken && (prevToken.text ?? '').endsWith('.')) {
+    const tokenText = prevToken.text as string;
+    const chainStr = tokenText.slice(0, -1);
+    const chain = chainStr.split('.');
+    const innermostQuery = soqlQueryAnalyzer.queryInfosAt(tokenIndex);
+    const sobjectName = (innermostQuery.length > 0 ? innermostQuery[0].sobjectName : undefined) || DEFAULT_SOBJECT;
+    items.push(
+      withSoqlContext(newFieldItem(RELATIONSHIP_TRAVERSAL_PLACEHOLDER), {
+        sobjectName,
+        relationshipChain: chain
+      })
+    );
+    return items;
+  }
+
   for (const [tokenType, followingTokens] of tokens) {
     // Don't propose what's already at the cursor position
     if (tokenType === tokenStream.get(tokenIndex).type) {
@@ -330,6 +353,7 @@ function generateCandidatesFromTokens(
       items.push({ ...newItem, ...newKeywordItem('<>') });
     }
   }
+
   return items;
 }
 
@@ -499,15 +523,48 @@ function generateCandidatesFromRules(
       // but it does propose soqlIdentifier, so we hinge off it for where expressions
       case SoqlParser.RULE_soqlIdentifier:
         if (
-          tokenIndex === ruleData.startTokenIndex &&
           [SoqlParser.RULE_soqlWhereExpr, SoqlParser.RULE_soqlDistanceExpr].includes(lastRuleId) &&
           !ruleData.ruleList.includes(SoqlParser.RULE_soqlHavingClause)
         ) {
-          completionItems.push(
-            withSoqlContext(newFieldItem(SOBJECT_FIELDS_LABEL_PLACEHOLDER), {
-              sobjectName: fromSObject
-            })
-          );
+          // Check for dot-traversal: cursor ON the start token (token contains a dot
+          // but doesn't end with one, e.g. "Cover_Cause__r.N") — partial traversal.
+          if (tokenIndex === ruleData.startTokenIndex) {
+            const startToken = tokenStream.get(ruleData.startTokenIndex);
+            const startTokenText = startToken.text ?? '';
+            if (startTokenText.includes('.')) {
+              // Partial traversal: derive chain from the part before the last dot.
+              const lastDot = startTokenText.lastIndexOf('.');
+              const chain = startTokenText.slice(0, lastDot).split('.');
+              completionItems.push(
+                withSoqlContext(newFieldItem(RELATIONSHIP_TRAVERSAL_PLACEHOLDER), {
+                  ...soqlItemContext,
+                  relationshipChain: chain
+                })
+              );
+            } else {
+              completionItems.push(
+                withSoqlContext(newFieldItem(SOBJECT_FIELDS_LABEL_PLACEHOLDER), {
+                  sobjectName: fromSObject
+                })
+              );
+            }
+          } else {
+            // Cursor is past the start token (e.g. "Cover_Cause__r." where the token
+            // ends with a dot, so the cursor lands on the next token).
+            const startToken = tokenStream.get(ruleData.startTokenIndex);
+            const tokenText = startToken.text;
+            if (tokenText && tokenText.includes('.')) {
+              const lastDot = tokenText.lastIndexOf('.');
+              const chainPart = tokenText.slice(0, lastDot);
+              const chain = chainPart.split('.');
+              completionItems.push(
+                withSoqlContext(newFieldItem(RELATIONSHIP_TRAVERSAL_PLACEHOLDER), {
+                  ...soqlItemContext,
+                  relationshipChain: chain
+                })
+              );
+            }
+          }
         }
         break;
       case SoqlParser.RULE_soqlLiteralValue:
