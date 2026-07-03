@@ -5,7 +5,7 @@
  * For full license text, see LICENSE.txt file in the repo root or https://opensource.org/licenses/BSD-3-Clause
  */
 import { CompletionItem, CompletionItemKind, InsertTextFormat } from 'vscode-languageserver';
-import { completionsFor, SoqlItemContext } from './completion';
+import { completionsFor, extractActiveQueryText, SoqlItemContext } from './completion';
 import { soqlDateRangeLiterals, soqlParametricDateRangeLiterals } from './completion/soql-functions';
 
 const SELECT_SNIPPET = {
@@ -924,6 +924,93 @@ describe('Code Completion for dot-traversal in SELECT (Account.| / Coverage__r.P
     expect(completions).toContainEqual(traversalItemFor('Case', ['Coverage__r', 'Policy__r']));
     expect(completions).not.toContainEqual(
       expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+  });
+});
+
+// ── Regression: completions in existing files ─────────────────────────────────
+//
+// When a file already contains a complete SOQL query and the user opens the file
+// and starts writing, completions must work as if starting fresh — not as if
+// continuing the existing query.
+//
+// Root cause: passing the full document text to the ANTLR parser caused C3 to
+// treat the cursor position as a post-query continuation, proposing LIMIT /
+// OFFSET / FOR instead of SELECT or field names.
+describe('extractActiveQueryText: isolates the query block at the cursor', () => {
+  it('returns the full text unchanged when cursor is on line 1', () => {
+    const text = 'SELECT Id FROM Account';
+    const { activeText, activeLine } = extractActiveQueryText(text, 1);
+    expect(activeText).toBe(text);
+    expect(activeLine).toBe(1);
+  });
+
+  it('returns the full text unchanged for a multi-line query (no complete block before cursor)', () => {
+    // Line 1 has SELECT but no FROM yet, so lines before cursor do NOT form a complete query
+    const text = 'SELECT Id\nFROM Account';
+    const { activeText, activeLine } = extractActiveQueryText(text, 2);
+    expect(activeText).toBe(text);
+    expect(activeLine).toBe(2);
+  });
+
+  it('extracts from cursor line when a complete query precedes it on earlier lines', () => {
+    const text = 'SELECT Id FROM Account\nS';
+    const { activeText, activeLine } = extractActiveQueryText(text, 2);
+    expect(activeText).toBe('S');
+    expect(activeLine).toBe(1);
+  });
+
+  it('extracts from cursor line when cursor is on an empty line after a complete query', () => {
+    const text = 'SELECT Id FROM Account\n';
+    const { activeText, activeLine } = extractActiveQueryText(text, 2);
+    expect(activeText).toBe('');
+    expect(activeLine).toBe(1);
+  });
+
+  it('extracts correctly when multiple lines precede the cursor but form a complete query', () => {
+    // Two-line query before cursor, then new content
+    const text = 'SELECT Id\nFROM Account\nSELECT ';
+    const { activeText, activeLine } = extractActiveQueryText(text, 3);
+    expect(activeText).toBe('SELECT ');
+    expect(activeLine).toBe(1);
+  });
+});
+
+describe('completionsFor: returns correct completions when opening an existing file', () => {
+  it('proposes SELECT when typing on a new line after a complete existing query', () => {
+    // Regression: used to return FOR / OFFSET / LIMIT instead of SELECT
+    const completions = completionsFor('SELECT Id FROM Account\nS', 2, 2);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: 'SELECT' })
+    );
+    // Must NOT propose post-query tokens as primary candidates
+    expect(completions).not.toContainEqual(
+      expect.objectContaining({ label: 'FOR' })
+    );
+    expect(completions).not.toContainEqual(
+      expect.objectContaining({ label: 'OFFSET' })
+    );
+  });
+
+  it('proposes SELECT snippet when cursor is on an empty line after a complete query', () => {
+    const completions = completionsFor('SELECT Id FROM Account\n', 2, 1);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: 'SELECT ... FROM ...' })
+    );
+  });
+
+  it('still returns correct field completions when editing within an existing query', () => {
+    // Cursor inside the SELECT clause of the existing query — must NOT be affected
+    const completions = completionsFor('SELECT  FROM Account', 1, 8);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+  });
+
+  it('still returns correct sobject completions when editing FROM clause of existing query', () => {
+    const completions = completionsFor('SELECT Id FROM ', 1, 16);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: '__SOBJECTS_PLACEHOLDER' })
     );
   });
 });

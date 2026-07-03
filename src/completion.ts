@@ -36,8 +36,90 @@ const DEFAULT_SOBJECT = 'Object';
 
 const itemsForBuiltinFunctions = soqlFunctions.map(soqlFn => newFunctionItem(soqlFn.name));
 
-export function completionsFor(text: string, line: number, column: number): CompletionItem[] {
+/**
+ * Returns the text and adjusted line number to use for completion.
+ *
+ * When a document contains a complete SOQL query on preceding lines (all
+ * non-whitespace tokens before the cursor line already include SELECT, FROM,
+ * and at least one identifier after FROM at nesting depth 0), the cursor is
+ * starting a *new* query context.  Passing the full document text to the
+ * ANTLR parser causes C3 to propose post-query tokens (LIMIT, OFFSET, FOR …)
+ * instead of a fresh query start.
+ *
+ * In that case we extract only the text from the cursor line onwards and
+ * reset the line to 1 so the rest of the completion logic is unaffected.
+ *
+ * Returns the original text + line unchanged when:
+ * - cursor is on line 1 (no preceding lines to check)
+ * - the cursor line does not exist in the text (fallback to original behaviour)
+ * - the preceding lines do not form a complete SELECT … FROM <sobject> block
+ */
+export function extractActiveQueryText(
+  text: string,
+  line: number
+): { activeText: string; activeLine: number } {
+  if (line <= 1) {
+    return { activeText: text, activeLine: line };
+  }
+
+  const lines = text.split('\n');
+
+  // If the cursor line does not exist, return the original text unchanged so
+  // that findCursorTokenIndex returns undefined (and completionsFor returns []).
+  if (line > lines.length) {
+    return { activeText: text, activeLine: line };
+  }
+
   const lexer = new SoqlLexer(new LowerCasingCharStream(parseHeaderComments(text).headerPaddedSoqlText));
+  const tokenStream = new CommonTokenStream(lexer);
+  tokenStream.fill();
+
+  let depth = 0;
+  let hasSelectBeforeLine = false;
+  let hasFromBeforeLine = false;
+  let hasFromSobjectBeforeLine = false; // at least one IDENTIFIER after the top-level FROM
+  let afterFrom = false;
+  let lastNonWSLineBeforeCursor = -1;
+
+  for (let i = 0; i < tokenStream.size; i++) {
+    const t = tokenStream.get(i);
+    if (t.line >= line) break;
+    if (t.type === SoqlLexer.WS) continue;
+    lastNonWSLineBeforeCursor = t.line;
+    const upper = (t.text as string).toUpperCase();
+    if (upper === '(') depth++;
+    else if (upper === ')') depth--;
+    else if (depth === 0 && t.type === SoqlLexer.SELECT) {
+      hasSelectBeforeLine = true;
+      afterFrom = false;
+    } else if (depth === 0 && t.type === SoqlLexer.FROM) {
+      hasFromBeforeLine = true;
+      afterFrom = true;
+    } else if (depth === 0 && afterFrom && t.type === SoqlLexer.IDENTIFIER) {
+      hasFromSobjectBeforeLine = true;
+      // Keep afterFrom true — there can be aliases, etc.
+    }
+  }
+
+  // If the text before the cursor line contains a complete top-level
+  // SELECT … FROM <sobject> block, the cursor is opening a new query context.
+  if (
+    hasSelectBeforeLine &&
+    hasFromBeforeLine &&
+    hasFromSobjectBeforeLine &&
+    lastNonWSLineBeforeCursor < line
+  ) {
+    const activeText = lines.slice(line - 1).join('\n');
+    return { activeText, activeLine: 1 };
+  }
+
+  return { activeText: text, activeLine: line };
+}
+
+export function completionsFor(text: string, line: number, column: number): CompletionItem[] {
+  const { activeText, activeLine } = extractActiveQueryText(text, line);
+
+  const lexer = new SoqlLexer(new LowerCasingCharStream(parseHeaderComments(activeText).headerPaddedSoqlText));
   const tokenStream = new CommonTokenStream(lexer);
   const parser = new SoqlParser(tokenStream);
   parser.removeErrorListeners();
@@ -45,7 +127,7 @@ export function completionsFor(text: string, line: number, column: number): Comp
 
   const parsedQuery = parser.soqlQuery();
   const completionTokenIndex = findCursorTokenIndex(tokenStream, {
-    line,
+    line: activeLine,
     column
   });
 
