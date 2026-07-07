@@ -55,4 +55,39 @@ describe('serverCore: server capabilities', () => {
       capturedInitResult?.capabilities?.completionProvider?.triggerCharacters ?? [];
     expect(triggerChars).toContain(' ');
   });
+
+  it('advertises "\\t" (tab) as a completion trigger character', () => {
+    const { capturedInitResult } = makeConnection();
+    const triggerChars: string[] =
+      capturedInitResult?.capabilities?.completionProvider?.triggerCharacters ?? [];
+    expect(triggerChars).toContain('\t');
+  });
+
+  it('advertises "," as a completion trigger character', () => {
+    const { capturedInitResult } = makeConnection();
+    const triggerChars: string[] =
+      capturedInitResult?.capabilities?.completionProvider?.triggerCharacters ?? [];
+    expect(triggerChars).toContain(',');
+  });
+
+  it('advertises "(" as a completion trigger character', () => {
+    const { capturedInitResult } = makeConnection();
+    const triggerChars: string[] =
+      capturedInitResult?.capabilities?.completionProvider?.triggerCharacters ?? [];
+    expect(triggerChars).toContain('(');
+  });
+
+  it('advertises "=" as a completion trigger character', () => {
+    const { capturedInitResult } = makeConnection();
+    const triggerChars: string[] =
+      capturedInitResult?.capabilities?.completionProvider?.triggerCharacters ?? [];
+    expect(triggerChars).toContain('=');
+  });
+
+  it('advertises "\\n" (newline) as a completion trigger character', () => {
+    const { capturedInitResult } = makeConnection();
+    const triggerChars: string[] =
+      capturedInitResult?.capabilities?.completionProvider?.triggerCharacters ?? [];
+    expect(triggerChars).toContain('\n');
+  });
 });

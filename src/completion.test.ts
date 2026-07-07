@@ -1105,3 +1105,118 @@ describe('completionsFor: multi-line query continuation', () => {
     expect(completions).not.toContainEqual(expect.objectContaining({ label: 'SELECT' }));
   });
 });
+
+// ── Clause keyword on the cursor line itself ───────────────────────────────────
+//
+// When the user types a new line and then starts typing WHERE / GROUP BY / ORDER BY
+// on that line, extractActiveQueryText must NOT slice the text — the WHERE keyword
+// is on the cursor line, not on a preceding line, so the scan (which stops at
+// t.line >= cursorLine) never sees it.  This causes the text to be sliced to just
+// "WHERE " which returns no completions.
+
+describe('completionsFor: WHERE / GROUP BY / ORDER BY on the cursor line', () => {
+  it('proposes field names after WHERE on a new line (single-line FROM)', () => {
+    // User typed "SELECT Id FROM Account\nWHERE |"
+    const completions = completionsFor('SELECT Id FROM Account\nWHERE ', 2, 7);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+    expect(completions).not.toContainEqual(expect.objectContaining({ label: 'SELECT' }));
+  });
+
+  it('proposes field names after WHERE on a new line (multi-line FROM)', () => {
+    // User typed SELECT on line 1, FROM on line 2, WHERE on line 3
+    const completions = completionsFor('SELECT Id\nFROM Account\nWHERE ', 3, 7);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+  });
+
+  it('proposes field names after WHERE with a tab instead of space', () => {
+    const completions = completionsFor('SELECT Id FROM Account\nWHERE\t', 2, 7);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+  });
+
+  it('proposes operators after WHERE fieldname on new line', () => {
+    const completions = completionsFor('SELECT Id FROM Account\nWHERE Name ', 2, 12);
+    expect(completions).toContainEqual(expect.objectContaining({ label: '=' }));
+    expect(completions).toContainEqual(expect.objectContaining({ label: 'LIKE' }));
+  });
+
+  it('proposes field names in GROUP BY on a new line', () => {
+    const completions = completionsFor('SELECT COUNT(Id) FROM Account\nGROUP BY ', 2, 10);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+  });
+
+  it('proposes field names in ORDER BY on a new line', () => {
+    const completions = completionsFor('SELECT Id FROM Account\nORDER BY ', 2, 10);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+  });
+
+  it('extractActiveQueryText does NOT slice when WHERE is on the cursor line', () => {
+    const text = 'SELECT Id FROM Account\nWHERE ';
+    const { activeText, activeLine } = extractActiveQueryText(text, 2);
+    // Must return the full text, not just 'WHERE '
+    expect(activeText).toBe(text);
+    expect(activeLine).toBe(2);
+  });
+
+  it('extractActiveQueryText does NOT slice when GROUP BY is on the cursor line', () => {
+    const text = 'SELECT COUNT(Id) FROM Account\nGROUP BY ';
+    const { activeText, activeLine } = extractActiveQueryText(text, 2);
+    expect(activeText).toBe(text);
+    expect(activeLine).toBe(2);
+  });
+
+  it('extractActiveQueryText does NOT slice when ORDER BY is on the cursor line', () => {
+    const text = 'SELECT Id FROM Account\nORDER BY ';
+    const { activeText, activeLine } = extractActiveQueryText(text, 2);
+    expect(activeText).toBe(text);
+    expect(activeLine).toBe(2);
+  });
+});
+
+// ── Tab characters as whitespace in SOQL queries ───────────────────────────────
+//
+// Tabs are valid SOQL whitespace.  findCursorTokenIndex must correctly resolve the
+// cursor position when tabs appear in the token stream.
+
+describe('completionsFor: tab characters as whitespace', () => {
+  it('proposes SObject after FROM when indented with a tab', () => {
+    // "SELECT Id\nFROM\t|" — cursor after a tab on line 2
+    const completions = completionsFor('SELECT Id\nFROM\t', 2, 6);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: '__SOBJECTS_PLACEHOLDER' })
+    );
+  });
+
+  it('proposes fields after SELECT when next line starts with tab', () => {
+    // "SELECT\n\t|" — cursor after tab on line 2 (still in SELECT clause)
+    const completions = completionsFor('SELECT\n\t', 2, 2);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+  });
+
+  it('proposes fields after comma + tab in SELECT', () => {
+    // "SELECT id,\n\t|" — cursor after tab on line 2
+    const completions = completionsFor('SELECT id,\n\t', 2, 2);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+  });
+
+  it('proposes field names after WHERE indented with tab', () => {
+    // "SELECT Id FROM Account\nWHERE\t|"
+    const completions = completionsFor('SELECT Id FROM Account\nWHERE\t', 2, 7);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+  });
+});

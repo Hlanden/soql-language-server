@@ -143,6 +143,32 @@ export function extractActiveQueryText(
     }
   }
 
+  // Also scan tokens on the cursor line itself for clause keywords.
+  // The main loop above stops at t.line >= line, so a WHERE / GROUP BY /
+  // ORDER BY keyword typed on the cursor line (e.g. "SELECT Id FROM Account\nWHERE |")
+  // was never seen.  We do a targeted second pass over just the cursor-line tokens
+  // to catch that case — without updating any other state.
+  if (hasSelectBeforeLine && hasFromBeforeLine && hasFromSobjectBeforeLine && !hasClauseKeywordsBeforeLine) {
+    for (let i = 0; i < tokenStream.size; i++) {
+      const t = tokenStream.get(i);
+      if (t.line < line) continue;
+      if (t.line > line) break;
+      if (t.type === SoqlLexer.WS) continue;
+      if (
+        depth === 0 &&
+        (t.type === SoqlLexer.WHERE ||
+          t.type === SoqlLexer.GROUP ||
+          t.type === SoqlLexer.ORDER ||
+          t.type === SoqlLexer.HAVING ||
+          t.type === SoqlLexer.LIMIT ||
+          t.type === SoqlLexer.WITH)
+      ) {
+        hasClauseKeywordsBeforeLine = true;
+        break;
+      }
+    }
+  }
+
   // Only treat the cursor as opening a *new* query when:
   // - the preceding lines form a complete SELECT … FROM <sobject> block, AND
   // - no clause keywords (WHERE / GROUP BY / ORDER BY / LIMIT / …) have been
@@ -272,13 +298,25 @@ export function findCursorTokenIndex(tokenStream: TokenStream, cursor: CursorPos
     const t = tokenStream.get(i);
 
     const tokenStartCol = t.charPositionInLine;
-    const tokenEndCol = tokenStartCol + (t.text as string).length;
     const tokenStartLine = t.line;
+    const isMultiLineWS = t.type === SoqlLexer.WS && !!t.text && (t.text.match(lineSeparator)?.length || 0) > 0;
     const tokenEndLine =
       t.type !== SoqlLexer.WS || !t.text ? tokenStartLine : tokenStartLine + (t.text.match(lineSeparator)?.length || 0);
 
-    // NOTE: tokenEndCol makes sense only of tokenStartLine === tokenEndLine
-    if (tokenEndLine > cursor.line || (tokenStartLine === cursor.line && tokenEndCol > cursorCol)) {
+    // For single-line tokens (or non-WS), tokenEndCol is simply start + length.
+    // For multi-line WS tokens the last-line content starts at column 0; its
+    // length is the number of characters after the final newline in the token text.
+    const tokenEndCol = isMultiLineWS
+      ? (t.text as string).length - (t.text as string).lastIndexOf('\n') - 1
+      : tokenStartCol + (t.text as string).length;
+
+    // NOTE: tokenEndCol makes sense only when the comparison is on tokenEndLine
+    const cursorIsAfterTokenEnd =
+      tokenEndLine > cursor.line ||
+      (tokenEndLine === cursor.line && tokenEndCol > cursorCol) ||
+      (!isMultiLineWS && tokenStartLine === cursor.line && tokenEndCol > cursorCol);
+
+    if (cursorIsAfterTokenEnd) {
       if (
         i > 0 &&
         tokenStartLine === cursor.line &&

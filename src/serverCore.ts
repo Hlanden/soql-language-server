@@ -36,7 +36,7 @@ export function setupServerConnection(connection: Connection): void {
       capabilities: {
         textDocumentSync: TextDocumentSyncKind.Full,
         completionProvider: {
-          triggerCharacters: [' ', '.']
+          triggerCharacters: [' ', '.', '\t', ',', '(', '=', '\n']
         }
       }
     };
