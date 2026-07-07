@@ -1180,6 +1180,43 @@ describe('completionsFor: WHERE / GROUP BY / ORDER BY on the cursor line', () =>
     expect(activeText).toBe(text);
     expect(activeLine).toBe(2);
   });
+
+  // Partial clause keyword typed as IDENTIFIER (e.g. "Wh" before completing "WHERE")
+  it('extractActiveQueryText does NOT slice when partial clause keyword is on cursor line', () => {
+    const text = 'SELECT Id FROM Account\nWh';
+    const { activeText, activeLine } = extractActiveQueryText(text, 2);
+    expect(activeText).toBe(text);
+    expect(activeLine).toBe(2);
+  });
+
+  it('proposes WHERE as completion when typing "Wh" after multi-field SELECT…FROM', () => {
+    const text = [
+      'SELECT ',
+      '    COUNT(Id),',
+      '    COUNT(Accounting_Group_item__c),',
+      '    COUNT(Storage_Unit__c) ',
+      'FROM Case',
+      'Wh'
+    ].join('\n');
+    const completions = completionsFor(text, 6, 3);
+    expect(completions).toContainEqual(expect.objectContaining({ label: 'WHERE' }));
+    expect(completions).not.toContainEqual(expect.objectContaining({ label: 'SELECT' }));
+  });
+
+  it('proposes WHERE on new line after multi-line SELECT…FROM with COUNT fields', () => {
+    const text = [
+      'SELECT ',
+      '    COUNT(Id),',
+      '    COUNT(Accounting_Group_item__c) ',
+      'FROM Case',
+      'WHERE '
+    ].join('\n');
+    const completions = completionsFor(text, 5, 7);
+    expect(completions).toContainEqual(
+      expect.objectContaining({ label: '__SOBJECT_FIELDS_PLACEHOLDER' })
+    );
+    expect(completions).not.toContainEqual(expect.objectContaining({ label: 'SELECT' }));
+  });
 });
 
 // ── Tab characters as whitespace in SOQL queries ───────────────────────────────

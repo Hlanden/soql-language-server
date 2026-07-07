@@ -148,12 +148,19 @@ export function extractActiveQueryText(
   // ORDER BY keyword typed on the cursor line (e.g. "SELECT Id FROM Account\nWHERE |")
   // was never seen.  We do a targeted second pass over just the cursor-line tokens
   // to catch that case — without updating any other state.
+  //
+  // We also handle partial clause keywords: when the user is mid-typing "Wh", "Gr",
+  // "Or" etc., the lexer produces an IDENTIFIER token.  Check whether the token text
+  // is a case-insensitive prefix of any clause keyword — if so, treat it as a clause
+  // continuation so we don't incorrectly slice the query context away.
+  const clauseKeywordPrefixes = ['WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET', 'WITH', 'FOR'];
   if (hasSelectBeforeLine && hasFromBeforeLine && hasFromSobjectBeforeLine && !hasClauseKeywordsBeforeLine) {
     for (let i = 0; i < tokenStream.size; i++) {
       const t = tokenStream.get(i);
       if (t.line < line) continue;
       if (t.line > line) break;
       if (t.type === SoqlLexer.WS) continue;
+      const upper = (t.text as string).toUpperCase();
       if (
         depth === 0 &&
         (t.type === SoqlLexer.WHERE ||
@@ -161,7 +168,10 @@ export function extractActiveQueryText(
           t.type === SoqlLexer.ORDER ||
           t.type === SoqlLexer.HAVING ||
           t.type === SoqlLexer.LIMIT ||
-          t.type === SoqlLexer.WITH)
+          t.type === SoqlLexer.WITH ||
+          // Partial keyword typed as IDENTIFIER (e.g. "Wh", "Gr", "Or", "Li")
+          (t.type === SoqlLexer.IDENTIFIER && clauseKeywordPrefixes.some(kw => kw.startsWith(upper) && upper.length < kw.length))
+        )
       ) {
         hasClauseKeywordsBeforeLine = true;
         break;
